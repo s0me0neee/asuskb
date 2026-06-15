@@ -1,4 +1,3 @@
-use anyhow::bail;
 use clap::Parser;
 pub mod asusctl;
 
@@ -28,10 +27,6 @@ enum KbCommands {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-
-    if std::env::args().len() == 1 {
-        bail!("No arguments are provided");
-    }
     let asusctl = asusctl::get_asusctl()?;
 
     match args.command {
@@ -39,10 +34,7 @@ fn main() -> anyhow::Result<()> {
             let kb_level = asusctl::get_kb_light_level(&asusctl)?;
             println!("{kb_level}");
         }
-        KbCommands::Set { level } => {
-            let kb = asusctl::KbLevel::try_from(level.to_string().as_str())?;
-            asusctl::set_kb_light_level(&asusctl, kb)?;
-        }
+        KbCommands::Set { level } => asusctl::set_kb_light_level(&asusctl, level)?,
         KbCommands::Inc => asusctl::inc_kb_light_level(&asusctl)?,
         KbCommands::Dec => asusctl::dec_kb_light_level(&asusctl)?,
         KbCommands::Step { step } => asusctl::custom_kb_light_level(&asusctl, step)?,

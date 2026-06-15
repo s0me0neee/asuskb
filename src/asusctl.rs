@@ -1,13 +1,12 @@
 use std::{
     fmt::Display,
-    io::Read,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use anyhow::{Context, Result, bail};
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub(crate) enum KbLevel {
     #[clap(name = "off")]
     Off,
@@ -25,12 +24,12 @@ pub(crate) struct Kbu8Level(u8);
 impl Display for KbLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match *self {
-            KbLevel::Off => "off",
-            KbLevel::Low => "low",
-            KbLevel::Med => "med",
-            KbLevel::High => "high",
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Med => "med",
+            Self::High => "high",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -39,11 +38,11 @@ impl TryFrom<&str> for KbLevel {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value.to_lowercase().as_str() {
-            "off" => Ok(KbLevel::Off),
-            "low" => Ok(KbLevel::Low),
-            "med" => Ok(KbLevel::Med),
-            "high" => Ok(KbLevel::High),
-            &_ => bail!("Invalid keyboard level, expected 'Off', Low', 'Med', or 'High'"),
+            "off" => Ok(Self::Off),
+            "low" => Ok(Self::Low),
+            "med" => Ok(Self::Med),
+            "high" => Ok(Self::High),
+            _ => bail!("Invalid keyboard level, expected 'off', 'low', 'med', or 'high'"),
         }
     }
 }
@@ -51,12 +50,12 @@ impl TryFrom<&str> for KbLevel {
 impl TryFrom<Kbu8Level> for KbLevel {
     type Error = anyhow::Error;
 
-    fn try_from(value: Kbu8Level) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(value: Kbu8Level) -> Result<Self, Self::Error> {
         match value.0 {
-            0 => Ok(KbLevel::Off),
-            1 => Ok(KbLevel::Low),
-            2 => Ok(KbLevel::Med),
-            3 => Ok(KbLevel::High),
+            0 => Ok(Self::Off),
+            1 => Ok(Self::Low),
+            2 => Ok(Self::Med),
+            3 => Ok(Self::High),
             _ => bail!("Invalid number keyboard level, expected '0', '1', '2' or '3'"),
         }
     }
@@ -65,10 +64,10 @@ impl TryFrom<Kbu8Level> for KbLevel {
 impl From<KbLevel> for Kbu8Level {
     fn from(value: KbLevel) -> Self {
         match value {
-            KbLevel::Off => Kbu8Level(0),
-            KbLevel::Low => Kbu8Level(1),
-            KbLevel::Med => Kbu8Level(2),
-            KbLevel::High => Kbu8Level(3),
+            KbLevel::Off => Self(0),
+            KbLevel::Low => Self(1),
+            KbLevel::Med => Self(2),
+            KbLevel::High => Self(3),
         }
     }
 }
@@ -76,84 +75,63 @@ impl From<KbLevel> for Kbu8Level {
 const ASUS_UTIL: &str = "asusctl";
 
 pub(crate) fn get_asusctl() -> Result<PathBuf> {
-    let asusctl_path = which::which_global(ASUS_UTIL)
-        .context("Can not find asusctl on system, install asusctl first")?;
-
-    if !asusctl_path.exists() {
-        bail!("Asusctl is found but its path is invalid");
-    }
-
-    if asusctl_path.is_dir() {
-        bail!("Asusctl path is a directory");
-    }
-
-    std::path::absolute(asusctl_path)
-        .context("Failed to convert asusctl path into a system absolute path")
+    which::which_global(ASUS_UTIL)
+        .context("Can not find asusctl on system, install asusctl first")
 }
 
 pub(crate) fn get_kb_light_level(asusctl: &Path) -> Result<KbLevel> {
-    let get_cmd = Command::new(asusctl)
+    let output = Command::new(asusctl)
         .args(["leds", "get"])
         .output()
         .context("Failed to execute asusctl command")?;
 
-    if !get_cmd.status.success() {
-        let stderr = String::from_utf8_lossy(&get_cmd.stderr);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
             "Asusctl exited with exit code {} \n {}",
-            get_cmd.status.code().unwrap_or(1),
+            output.status.code().unwrap_or(1),
             stderr.trim()
         );
     }
 
-    let kb_level = if let Some(level) = String::from_utf8_lossy(&get_cmd.stdout)
+    if let Some(level) = String::from_utf8_lossy(&output.stdout)
         .trim()
         .split(": ")
         .nth(1)
     {
-        KbLevel::try_from(level).map_err(|e| anyhow::anyhow!(e))?
+        KbLevel::try_from(level).map_err(|e| anyhow::anyhow!(e))
     } else {
         bail!("Can not parse output into a valid keyboard light level");
-    };
-
-    Ok(kb_level)
+    }
 }
 
 pub(crate) fn set_kb_light_level(asusctl: &Path, kb_level: KbLevel) -> Result<()> {
-    let mut cmd = Command::new(asusctl);
-    let set_cmd = cmd.args(["leds", "set"]);
-    let kb_level_arg = kb_level.to_string();
-    set_cmd.arg(kb_level_arg);
+    let output = Command::new(asusctl)
+        .args(["leds", "set", &kb_level.to_string()])
+        .output()
+        .context("Failed to execute asusctl command")?;
 
-    if let Ok(mut child) = set_cmd.spawn() {
-        if let Ok(exit_code) = child.wait() {
-            if !exit_code.success() {
-                let mut stderr_buffer = String::new();
-                let mut stderr = child
-                    .stderr
-                    .ok_or_else(|| anyhow::anyhow!("Failed to get stderr"))?;
-                stderr.read_to_string(&mut stderr_buffer)?;
-                bail!(
-                    "Asusctl exited with exit code {} \n {}",
-                    exit_code.code().unwrap_or(1),
-                    stderr_buffer.trim()
-                );
-            }
-        } else {
-            bail!("Can not run chile process")
-        }
-    } else {
-        bail!("Failed to spawn child process")
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Asusctl exited with exit code {} \n {}",
+            output.status.code().unwrap_or(1),
+            stderr.trim()
+        );
     }
 
     Ok(())
 }
 
 fn change_kb_light_level(asusctl: &Path, step: i8) -> Result<()> {
-    let cur_level = Kbu8Level::from(get_kb_light_level(asusctl)?);
-    let new_level = (cur_level.0 as i8 + step).clamp(0, 3);
-    set_kb_light_level(asusctl, KbLevel::try_from(Kbu8Level(new_level as u8))?)?;
-    Ok(())
+    let cur = Kbu8Level::from(get_kb_light_level(asusctl)?).0;
+    let new_level = match (i16::from(cur) + i16::from(step)).clamp(0, 3) {
+        0 => KbLevel::Off,
+        1 => KbLevel::Low,
+        2 => KbLevel::Med,
+        _ => KbLevel::High,
+    };
+    set_kb_light_level(asusctl, new_level)
 }
 
 pub(crate) fn inc_kb_light_level(asusctl: &Path) -> Result<()> {
@@ -167,8 +145,6 @@ pub(crate) fn dec_kb_light_level(asusctl: &Path) -> Result<()> {
 pub(crate) fn custom_kb_light_level(asusctl: &Path, step: i8) -> Result<()> {
     match step {
         (-3..=3) => change_kb_light_level(asusctl, step),
-        _ => {
-            bail!("Step have to be between -3 and 3 inclusive")
-        }
+        _ => bail!("Step has to be between -3 and 3 inclusive"),
     }
 }
